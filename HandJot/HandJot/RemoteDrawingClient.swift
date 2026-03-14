@@ -63,7 +63,7 @@ final class RemoteDrawingClient {
         if let endpoint = endpoint {
             self.endpoint = endpoint
         } else {
-            self.endpoint = URL(string: "https://example.com/api/drawing")!
+            self.endpoint = URL(string: "https://e0a0-38-254-176-186.ngrok-free.app/api/drawing")!
         }
         self.session = session
     }

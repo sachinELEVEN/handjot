@@ -1,0 +1,20 @@
+.DS_Store
+
+# macOS
+Icon?
+
+# Xcode
+*.xcuserdata/
+*.xcuserdatad/
+DerivedData/
+caches/
+
+# Node
+node_modules/
+
+# Build artifacts
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+
+# Swift Package Manager
+.build/

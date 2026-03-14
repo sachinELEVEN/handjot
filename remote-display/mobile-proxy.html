@@ -184,37 +184,50 @@
       statusBar.textContent = `Last update: ${new Date(payload.timestamp).toLocaleTimeString()}`;
     }
 
-    function getStrokeAndMenuInformation() {
-      return Promise.resolve({
-        type: "menu",
-        timestamp: new Date().toISOString(),
-        strokes: [
-          {
-            id: "3A4D0DD3-8A75-4A0D-AA7E-2BFB2E94C7E3",
-            points: [
-              { x: 0.12, y: 0.34 },
-              { x: 0.14, y: 0.36 },
-              { x: 0.17, y: 0.39 }
-            ],
-            color: { red: 1, green: 1, blue: 1, alpha: 1 }
-          }
-        ],
-        liveStroke: {
-          id: "F1C7B8F4-5C2E-4D5C-B9C9-C54F026E4F0A",
+    const FALLBACK_PAYLOAD = {
+      type: "menu",
+      timestamp: new Date().toISOString(),
+      strokes: [
+        {
+          id: "3A4D0DD3-8A75-4A0D-AA7E-2BFB2E94C7E3",
           points: [
-            { x: 0.22, y: 0.41 },
-            { x: 0.23, y: 0.43 }
+            { x: 0.12, y: 0.34 },
+            { x: 0.14, y: 0.36 },
+            { x: 0.17, y: 0.39 }
           ],
-          color: { red: 0.56, green: 0.97, blue: 0.85, alpha: 1 }
-        },
-        menuVisible: true,
-        menuOptions: [
-          { id: 1, title: "Change color" },
-          { id: 2, title: "New drawing space" },
-          { id: 3, title: "Undo" },
-          { id: 5, title: "Drawing/Pause toggle" }
-        ]
-      });
+          color: { red: 1, green: 1, blue: 1, alpha: 1 }
+        }
+      ],
+      liveStroke: {
+        id: "F1C7B8F4-5C2E-4D5C-B9C9-C54F026E4F0A",
+        points: [
+          { x: 0.22, y: 0.41 },
+          { x: 0.23, y: 0.43 }
+        ],
+        color: { red: 0.56, green: 0.97, blue: 0.85, alpha: 1 }
+      },
+      menuVisible: true,
+      menuOptions: [
+        { id: 1, title: "Change color" },
+        { id: 2, title: "New drawing space" },
+        { id: 3, title: "Undo" },
+        { id: 5, title: "Drawing/Pause toggle" }
+      ]
+    };
+
+    async function getStrokeAndMenuInformation() {
+      try {
+        const response = await fetch("/api/latest");
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload && Object.keys(payload).length) {
+            return payload;
+          }
+        }
+      } catch (error) {
+        console.warn("Unable to fetch live drawing data, falling back to mock", error);
+      }
+      return FALLBACK_PAYLOAD;
     }
 
     async function update() {
