@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HandJot Remote Renderer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top, #1d1f2a, #0d0f16);
+      color: #fff;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    #drawing-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #menu-overlay {
+      position: absolute;
+      left: 50%;
+      top: 5%;
+      transform: translate(-50%, 0);
+      background: rgba(7, 10, 18, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 18px 22px;
+      max-width: 360px;
+      width: min(80vw, 360px);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 20px 40px rgba(12, 14, 24, 0.5);
+      display: none;
+    }
+
+    #menu-overlay h3 {
+      margin: 0 0 10px;
+      font-size: 1.1rem;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      color: #e0e6ff;
+    }
+
+    #menu-overlay ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #menu-overlay li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1rem;
+      color: #f0f4ff;
+    }
+
+    #menu-overlay li .badge {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      display: grid;
+      place-items: center;
+      font-weight: 600;
+      font-size: 1rem;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    #status-bar {
+      padding: 12px 18px;
+      font-size: 0.9rem;
+      background: rgba(0, 0, 0, 0.6);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="drawing-container">
+    <canvas id="drawing-canvas"></canvas>
+    <div id="menu-overlay" aria-live="polite">
+      <h3>Gesture menu</h3>
+      <ul id="menu-list"></ul>
+      <p style="margin: 8px 0 0; font-size: 0.8rem; color: rgba(255,255,255,0.7)">Raise the matching number of fingers to trigger an action.</p>
+    </div>
+  </div>
+  <div id="status-bar">Waiting for data…</div>
+
+  <script>
+    const canvas = document.getElementById("drawing-canvas");
+    const ctx = canvas.getContext("2d");
+    const menuOverlay = document.getElementById("menu-overlay");
+    const menuList = document.getElementById("menu-list");
+    const statusBar = document.getElementById("status-bar");
+
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth * window.devicePixelRatio;
+      canvas.height = canvas.clientHeight * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    }
+
+    window.addEventListener("resize", () => {
+      resizeCanvas();
+      render(lastPayload);
+    });
+
+    resizeCanvas();
+
+    let lastPayload = null;
+
+    function drawStroke(stroke, isLive = false) {
+      if (!stroke || stroke.points.length < 2) return;
+      ctx.strokeStyle = `rgba(${Math.round(stroke.color.red * 255)}, ${Math.round(stroke.color.green * 255)}, ${Math.round(stroke.color.blue * 255)}, ${stroke.color.alpha})`;
+      ctx.lineWidth = isLive ? 6 : 4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      stroke.points.forEach((point, index) => {
+        const x = point.x * canvas.clientWidth;
+        const y = point.y * canvas.clientHeight;
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+      if (isLive) {
+        ctx.globalAlpha = 0.35;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function clearCanvas() {
+      ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    }
+
+    function render(payload) {
+      lastPayload = payload;
+      if (!payload) {
+        statusBar.textContent = "No data yet";
+        return;
+      }
+      clearCanvas();
+      if (payload.strokes) {
+        payload.strokes.forEach(stroke => drawStroke(stroke));
+      }
+      if (payload.liveStroke) {
+        drawStroke(payload.liveStroke, true);
+      }
+
+      if (payload.menuVisible && Array.isArray(payload.menuOptions)) {
+        menuList.innerHTML = "";
+        payload.menuOptions.forEach(option => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="badge">${option.id}</span><span>${option.title}</span>`;
+          menuList.appendChild(li);
+        });
+        menuOverlay.style.display = "block";
+      } else {
+        menuOverlay.style.display = "none";
+      }
+
+      statusBar.textContent = `Last update: ${new Date(payload.timestamp).toLocaleTimeString()}`;
+    }
+
+    function getStrokeAndMenuInformation() {
+      return Promise.resolve({
+        type: "menu",
+        timestamp: new Date().toISOString(),
+        strokes: [
+          {
+            id: "3A4D0DD3-8A75-4A0D-AA7E-2BFB2E94C7E3",
+            points: [
+              { x: 0.12, y: 0.34 },
+              { x: 0.14, y: 0.36 },
+              { x: 0.17, y: 0.39 }
+            ],
+            color: { red: 1, green: 1, blue: 1, alpha: 1 }
+          }
+        ],
+        liveStroke: {
+          id: "F1C7B8F4-5C2E-4D5C-B9C9-C54F026E4F0A",
+          points: [
+            { x: 0.22, y: 0.41 },
+            { x: 0.23, y: 0.43 }
+          ],
+          color: { red: 0.56, green: 0.97, blue: 0.85, alpha: 1 }
+        },
+        menuVisible: true,
+        menuOptions: [
+          { id: 1, title: "Change color" },
+          { id: 2, title: "New drawing space" },
+          { id: 3, title: "Undo" },
+          { id: 5, title: "Drawing/Pause toggle" }
+        ]
+      });
+    }
+
+    async function update() {
+      const payload = await getStrokeAndMenuInformation();
+      render(payload);
+    }
+
+    update();
+    setInterval(update, 1000);
+  </script>
+</body>
+</html>
