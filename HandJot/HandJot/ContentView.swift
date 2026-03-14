@@ -28,13 +28,12 @@ struct ContentView: View {
                         )
                 }
                 if manager.manualMenuVisible {
-                    VStack {
-                        ManualOptionsOverlay(manager: manager)
-                            .padding(.top, 24)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .zIndex(1)
+                    ManualOptionsOverlay(manager: manager)
+                        .frame(maxWidth: min(geometry.size.width * 0.75, 360))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .position(x: geometry.size.width / 2, y: geometry.size.height * 0.18)
+                        .zIndex(1)
                 }
                 VStack {
                     Spacer()
@@ -139,14 +138,6 @@ struct ContentView_Previews: PreviewProvider {
 struct ManualOptionsOverlay: View {
     @ObservedObject var manager: HandTrackingManager
 
-    private let options: [(Int, String)] = [
-        (1, "Change color"),
-        (2, "New drawing space"),
-        (3, "Undo"),
-       // (4, "Drawing mode"),
-        (5, "Drawing/Pause toggle")
-    ]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
@@ -157,16 +148,16 @@ struct ManualOptionsOverlay: View {
                     .foregroundColor(.white)
             }
 
-            ForEach(options, id: \.0) { option in
+            ForEach(manager.manualMenuOptions) { option in
                 HStack(spacing: 12) {
-                    Text("\(option.0)")
+                    Text("\(option.id)")
                         .font(.title3)
                         .fontWeight(.semibold)
                         .frame(width: 34, height: 34)
                         .background(manager.currentDrawingColor.opacity(0.9))
                         .clipShape(Circle())
                         .foregroundColor(.white)
-                    Text(option.1)
+                    Text(option.title)
                         .foregroundColor(.white)
                         .font(.body)
                 }

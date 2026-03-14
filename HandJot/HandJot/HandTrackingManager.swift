@@ -18,6 +18,11 @@ struct Stroke: Identifiable {
     let color: Color
 }
 
+struct ManualMenuItem: Identifiable, Codable {
+    let id: Int
+    let title: String
+}
+
 struct CalibrationProfile {
     var topLeft: CGPoint?
     var bottomRight: CGPoint?
@@ -81,6 +86,18 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let selectionFrameThreshold: Int = 6
     private let manualMenuCooldown: TimeInterval = 1.2
     private var messageWorkItem: DispatchWorkItem?
+
+    private let remoteClient = RemoteDrawingClient()
+    private let manualMenuItems: [ManualMenuItem] = [
+        .init(id: 1, title: "Change color"),
+        .init(id: 2, title: "New drawing space"),
+        .init(id: 3, title: "Undo"),
+        .init(id: 5, title: "Drawing/Pause toggle")
+    ]
+
+    var manualMenuOptions: [ManualMenuItem] {
+        manualMenuItems
+    }
 
     private let movementStartThreshold: CGFloat = 0.0
     private let stopTimeout: TimeInterval = 0.25
@@ -237,6 +254,9 @@ final class HandTrackingManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.latestCoordinate = message
             self.isDrawing = self.drawingState
+            if self.drawingState || self.manualMenuVisible {
+                self.publishRemoteDrawingState()
+            }
         }
     }
 
@@ -268,6 +288,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
                 self.strokes.append(stroke)
             }
             self.isDrawing = false
+            self.publishRemoteDrawingState()
         }
     }
 
@@ -277,6 +298,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
         finalizeStroke()
         DispatchQueue.main.async {
             self.manualMenuVisible = true
+            self.publishRemoteDrawingState(type: .menu)
         }
         flashManualActionMessage("Menu ready — show 1-5 fingers to choose an action")
     }
@@ -285,6 +307,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
         guard manualMenuVisible else { return }
         DispatchQueue.main.async {
             self.manualMenuVisible = false
+            self.publishRemoteDrawingState(type: .menu)
         }
         manualMenuCooldownUntil = Date().addingTimeInterval(manualMenuCooldown)
         selectionStableCount = 0
@@ -348,6 +371,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
         drawingStroke = nil
         DispatchQueue.main.async {
             self.strokes.removeAll()
+            self.publishRemoteDrawingState()
         }
         flashManualActionMessage("Cleared drawing")
     }
@@ -357,6 +381,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
             if !self.strokes.isEmpty {
                 self.strokes.removeLast()
                 self.flashManualActionMessage("Undid last stroke")
+                self.publishRemoteDrawingState()
             } else {
                 self.flashManualActionMessage("Nothing to undo yet")
             }
@@ -394,6 +419,19 @@ final class HandTrackingManager: NSObject, ObservableObject {
         }
         messageWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
+    }
+
+    private func publishRemoteDrawingState(type: RemoteDrawingMessageType = .strokes) {
+        let strokesPayload = strokes.compactMap { $0.serializable() }
+        let livePayload = drawingStroke?.serializable()
+        let optionsPayload = manualMenuVisible ? manualMenuItems : nil
+        let message = RemoteDrawingMessage(type: type,
+                                           timestamp: Date(),
+                                           strokes: strokesPayload,
+                                           liveStroke: livePayload,
+                                           menuVisible: manualMenuVisible,
+                                           menuOptions: optionsPayload)
+        remoteClient.send(message)
     }
 
     private func detectGesture(from observation: VNHumanHandPoseObservation) {
