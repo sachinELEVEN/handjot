@@ -74,7 +74,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let palette: [Color] = [.white, .mint, .cyan, .pink, .orange]
     private var colorIndex: Int = 0
     private var fistFrameCount: Int = 0
-    private let fistFrameThreshold: Int = 3
+    private let fistFrameThreshold: Int = 100
     private var selectionStableCount: Int = 0
     private var lastSelectionCount: Int?
     private var manualMenuCooldownUntil: Date?
@@ -82,7 +82,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let manualMenuCooldown: TimeInterval = 1.2
     private var messageWorkItem: DispatchWorkItem?
 
-    private let movementStartThreshold: CGFloat = 0.015
+    private let movementStartThreshold: CGFloat = 0.0
     private let stopTimeout: TimeInterval = 0.25
     private let smoothingFactor: CGFloat = 0.45
 
@@ -401,51 +401,111 @@ final class HandTrackingManager: NSObject, ObservableObject {
     }
 
     private func countExtendedFingers(from observation: VNHumanHandPoseObservation) -> Int {
-        guard let wrist = try? observation.recognizedPoint(.wrist), wrist.confidence >= 0.35 else {
-            print("Wrist confidence -> ")
+
+        func point(_ name: VNHumanHandPoseObservation.JointName) -> VNRecognizedPoint? {
+            guard let p = try? observation.recognizedPoint(name), p.confidence > 0.5 else {
+                return nil
+            }
+            return p
+        }
+
+        guard
+            let wrist = point(.wrist),
+            let indexMCP = point(.indexMCP),
+            let middleMCP = point(.middleMCP)
+        else {
             return 0
         }
 
-        let fingerJoints: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
-            (.thumbTip, .thumbIP),
-            (.indexTip, .indexPIP),
-            (.middleTip, .middlePIP),
-            (.ringTip, .ringPIP),
-            (.littleTip, .littlePIP)
-        ]
+        // Palm size used for normalization
+        let palmSize = hypot(indexMCP.location.x - wrist.location.x,
+                             indexMCP.location.y - wrist.location.y)
 
         var extended = 0
-        for (tipName, pipName) in fingerJoints {
+
+        // Helper to compute angle at a joint
+        func angle(a: CGPoint, b: CGPoint, c: CGPoint) -> CGFloat {
+            let ab = CGVector(dx: a.x - b.x, dy: a.y - b.y)
+            let cb = CGVector(dx: c.x - b.x, dy: c.y - b.y)
+
+            let dot = ab.dx * cb.dx + ab.dy * cb.dy
+            let magAB = sqrt(ab.dx * ab.dx + ab.dy * ab.dy)
+            let magCB = sqrt(cb.dx * cb.dx + cb.dy * cb.dy)
+
+            guard magAB > 0, magCB > 0 else { return 0 }
+
+            let cosAngle = dot / (magAB * magCB)
+            return acos(max(-1, min(1, cosAngle))) * 180 / .pi
+        }
+
+        // Finger detection using joint angles
+        func fingerExtended(mcp: VNHumanHandPoseObservation.JointName,
+                            pip: VNHumanHandPoseObservation.JointName,
+                            tip: VNHumanHandPoseObservation.JointName) -> Bool {
+
             guard
-                let tip = try? observation.recognizedPoint(tipName),
-                let pip = try? observation.recognizedPoint(pipName),
-                tip.confidence >= 0.35,
-                pip.confidence >= 0.35
-            else {
-                continue
+                let mcpP = point(mcp),
+                let pipP = point(pip),
+                let tipP = point(tip)
+            else { return false }
+
+            let a = CGPoint(x: mcpP.location.x, y: mcpP.location.y)
+            let b = CGPoint(x: pipP.location.x, y: pipP.location.y)
+            let c = CGPoint(x: tipP.location.x, y: tipP.location.y)
+
+            let jointAngle = angle(a: a, b: b, c: c)
+
+            // Straight finger ≈ 160°+
+            if jointAngle > 160 {
+                let tipDist = hypot(tipP.location.x - wrist.location.x,
+                                    tipP.location.y - wrist.location.y)
+
+                // Ensure finger actually extends away from palm
+                return tipDist > palmSize * 0.7
             }
 
-            if fingerExtended(from: tip, to: pip, wrist: wrist) {
+            return false
+        }
+
+        // Index
+        if fingerExtended(mcp: .indexMCP, pip: .indexPIP, tip: .indexTip) {
+            extended += 1
+        }
+
+        // Middle
+        if fingerExtended(mcp: .middleMCP, pip: .middlePIP, tip: .middleTip) {
+            extended += 1
+        }
+
+        // Ring
+        if fingerExtended(mcp: .ringMCP, pip: .ringPIP, tip: .ringTip) {
+            extended += 1
+        }
+
+        // Little
+        if fingerExtended(mcp: .littleMCP, pip: .littlePIP, tip: .littleTip) {
+            extended += 1
+        }
+
+        // Thumb (different logic)
+        if let thumbTip = point(.thumbTip),
+           let thumbIP = point(.thumbIP),
+           let thumbCMC = point(.thumbCMC) {
+
+            let tip = thumbTip.location
+            let ip = thumbIP.location
+            let cmc = thumbCMC.location
+
+            let thumbExtension = hypot(tip.x - cmc.x, tip.y - cmc.y)
+            let thumbFold = hypot(ip.x - cmc.x, ip.y - cmc.y)
+
+            if thumbExtension > thumbFold * 1.2 {
                 extended += 1
             }
         }
 
         return extended
-    }
-
-    private func fingerExtended(from tip: VNRecognizedPoint, to pip: VNRecognizedPoint, wrist: VNRecognizedPoint) -> Bool {
-        let dx = tip.location.x - pip.location.x
-        let dy = tip.location.y - pip.location.y
-        let tipDistance = sqrt(dx * dx + dy * dy)
-
-        let tipToWrist = hypot(tip.location.x - wrist.location.x, tip.location.y - wrist.location.y)
-        let dynamicThreshold = max(0.035, tipToWrist * 0.4)
-        let verticalDelta = tip.location.y - pip.location.y
-
-        let relaxedExtension = verticalDelta > 0.025 && tipDistance > 0.03
-        return (tipDistance >= dynamicThreshold && tipToWrist >= 0.035) || relaxedExtension
-    }
-}
+    }}
 
 extension HandTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
