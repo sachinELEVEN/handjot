@@ -74,7 +74,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let palette: [Color] = [.white, .mint, .cyan, .pink, .orange]
     private var colorIndex: Int = 0
     private var fistFrameCount: Int = 0
-    private let fistFrameThreshold: Int = 6
+    private let fistFrameThreshold: Int = 3
     private var selectionStableCount: Int = 0
     private var lastSelectionCount: Int?
     private var manualMenuCooldownUntil: Date?
@@ -401,15 +401,21 @@ final class HandTrackingManager: NSObject, ObservableObject {
     }
 
     private func countExtendedFingers(from observation: VNHumanHandPoseObservation) -> Int {
-        let fingerPairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+        guard let wrist = try? observation.recognizedPoint(.wrist), wrist.confidence >= 0.35 else {
+            print("Wrist confidence -> ")
+            return 0
+        }
+
+        let fingerJoints: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
             (.thumbTip, .thumbIP),
             (.indexTip, .indexPIP),
             (.middleTip, .middlePIP),
             (.ringTip, .ringPIP),
             (.littleTip, .littlePIP)
         ]
+
         var extended = 0
-        for (tipName, pipName) in fingerPairs {
+        for (tipName, pipName) in fingerJoints {
             guard
                 let tip = try? observation.recognizedPoint(tipName),
                 let pip = try? observation.recognizedPoint(pipName),
@@ -418,17 +424,26 @@ final class HandTrackingManager: NSObject, ObservableObject {
             else {
                 continue
             }
-            if fingerExtended(from: tip, to: pip) {
+
+            if fingerExtended(from: tip, to: pip, wrist: wrist) {
                 extended += 1
             }
         }
+
         return extended
     }
 
-    private func fingerExtended(from tip: VNRecognizedPoint, to pip: VNRecognizedPoint) -> Bool {
+    private func fingerExtended(from tip: VNRecognizedPoint, to pip: VNRecognizedPoint, wrist: VNRecognizedPoint) -> Bool {
         let dx = tip.location.x - pip.location.x
         let dy = tip.location.y - pip.location.y
-        return sqrt(dx * dx + dy * dy) >= 0.06
+        let tipDistance = sqrt(dx * dx + dy * dy)
+
+        let tipToWrist = hypot(tip.location.x - wrist.location.x, tip.location.y - wrist.location.y)
+        let dynamicThreshold = max(0.035, tipToWrist * 0.4)
+        let verticalDelta = tip.location.y - pip.location.y
+
+        let relaxedExtension = verticalDelta > 0.025 && tipDistance > 0.03
+        return (tipDistance >= dynamicThreshold && tipToWrist >= 0.035) || relaxedExtension
     }
 }
 
