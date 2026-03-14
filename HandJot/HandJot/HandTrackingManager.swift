@@ -74,7 +74,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let palette: [Color] = [.white, .mint, .cyan, .pink, .orange]
     private var colorIndex: Int = 0
     private var fistFrameCount: Int = 0
-    private let fistFrameThreshold: Int = 100
+    private let fistFrameThreshold: Int = 20
     private var selectionStableCount: Int = 0
     private var lastSelectionCount: Int?
     private var manualMenuCooldownUntil: Date?
@@ -85,6 +85,8 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let movementStartThreshold: CGFloat = 0.0
     private let stopTimeout: TimeInterval = 0.25
     private let smoothingFactor: CGFloat = 0.45
+    private let fistMovementResetThreshold: CGFloat = 100//make it big because we dont need it
+    private var currentModeDrawingFromOptionMenu = true;
 
     override init() {
         handPoseRequest = VNDetectHumanHandPoseRequest()
@@ -208,6 +210,10 @@ final class HandTrackingManager: NSObject, ObservableObject {
         let movement = movementDistance(from: smoothed, to: previousSmoothed)
         lastMovementDelta = movement
 
+        if movement >= fistMovementResetThreshold {
+            fistFrameCount = 0
+        }
+
         if allowDrawing && movement >= movementStartThreshold {
             lastMovementTimestamp = now
             if !drawingState {
@@ -296,25 +302,34 @@ final class HandTrackingManager: NSObject, ObservableObject {
         }
         selectionStableCount += 1
         if selectionStableCount >= selectionFrameThreshold {
-            hideManualMenu()
+            
             lastSelectionCount = nil
             selectionStableCount = 0
-            performManualOption(count)
+           performManualOption(count)
         }
     }
 
     private func performManualOption(_ number: Int) {
         switch number {
         case 1:
+            hideManualMenu()
             cycleColor()
+            
         case 2:
+            hideManualMenu()
             clearDrawing()
+            
         case 3:
+            hideManualMenu()
             undoLastStroke()
-        case 4:
-            enterDrawingMode()
+            
+//        case 4: //4 fingers are now used for showing the option menu to the user as its more reliable
+//            enterDrawingMode()
         case 5:
-            pauseDrawing()
+            hideManualMenu()
+            currentModeDrawingFromOptionMenu ? pauseDrawing() : enterDrawingMode()
+            
+//            pauseDrawing()
         default:
             break
         }
@@ -350,6 +365,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
 
     private func enterDrawingMode() {
         allowDrawing = true
+        currentModeDrawingFromOptionMenu = true
         DispatchQueue.main.async {
             self.isManualPaused = false
         }
@@ -358,6 +374,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
 
     private func pauseDrawing() {
         allowDrawing = false
+        currentModeDrawingFromOptionMenu = false
         DispatchQueue.main.async {
             self.isManualPaused = true
         }
@@ -389,7 +406,8 @@ final class HandTrackingManager: NSObject, ObservableObject {
     }
 
     private func updateFistCounter(for extendedCount: Int) {
-        if extendedCount <= 0 {
+        //we dont look for first but look for 4 fingers for showing the option menu
+        if extendedCount == 4 {
             fistFrameCount += 1
             if fistFrameCount >= fistFrameThreshold {
                 fistFrameCount = 0
@@ -535,7 +553,7 @@ extension HandTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 return
             }
 
-            let normalized = CGPoint(x: indexTip.location.x, y: 1 - indexTip.location.y)
+            let normalized = CGPoint(x: 1 - indexTip.location.x, y: 1 - indexTip.location.y)
             detectGesture(from: observation)
             processNormalizedPoint(normalized)
         } catch {

@@ -143,8 +143,8 @@ struct ManualOptionsOverlay: View {
         (1, "Change color"),
         (2, "New drawing space"),
         (3, "Undo"),
-        (4, "Drawing mode"),
-        (5, "Pause drawing")
+       // (4, "Drawing mode"),
+        (5, "Drawing/Pause toggle")
     ]
 
     var body: some View {
