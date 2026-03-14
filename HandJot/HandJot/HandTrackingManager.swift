@@ -18,11 +18,6 @@ struct Stroke: Identifiable {
     let color: Color
 }
 
-struct ManualMenuItem: Identifiable, Codable {
-    let id: Int
-    let title: String
-}
-
 struct CalibrationProfile {
     var topLeft: CGPoint?
     var bottomRight: CGPoint?
@@ -86,6 +81,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let selectionFrameThreshold: Int = 6
     private let manualMenuCooldown: TimeInterval = 1.2
     private var messageWorkItem: DispatchWorkItem?
+    private var drawingSurfaceSize: CanvasSize?
 
     private let remoteClient = RemoteDrawingClient()
     private let manualMenuItems: [ManualMenuItem] = [
@@ -191,6 +187,10 @@ final class HandTrackingManager: NSObject, ObservableObject {
         }
 
         return true
+    }
+
+    func updateDrawingSurfaceSize(_ size: CGSize) {
+        drawingSurfaceSize = CanvasSize(width: Double(size.width), height: Double(size.height))
     }
 
     private func handleNoObservation() {
@@ -430,7 +430,8 @@ final class HandTrackingManager: NSObject, ObservableObject {
                                            strokes: strokesPayload,
                                            liveStroke: livePayload,
                                            menuVisible: manualMenuVisible,
-                                           menuOptions: optionsPayload)
+                                           menuOptions: optionsPayload,
+                                           canvasSize: drawingSurfaceSize)
         remoteClient.send(message)
     }
 

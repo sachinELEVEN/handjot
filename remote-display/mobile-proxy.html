@@ -113,9 +113,11 @@
     const statusBar = document.getElementById("status-bar");
 
     function resizeCanvas() {
-      canvas.width = canvas.clientWidth * window.devicePixelRatio;
-      canvas.height = canvas.clientHeight * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvas.clientWidth * dpr;
+      canvas.height = canvas.clientHeight * dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
     }
 
     window.addEventListener("resize", () => {
@@ -127,61 +129,8 @@
 
     let lastPayload = null;
 
-    function drawStroke(stroke, isLive = false) {
-      if (!stroke || stroke.points.length < 2) return;
-      ctx.strokeStyle = `rgba(${Math.round(stroke.color.red * 255)}, ${Math.round(stroke.color.green * 255)}, ${Math.round(stroke.color.blue * 255)}, ${stroke.color.alpha})`;
-      ctx.lineWidth = isLive ? 6 : 4;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      stroke.points.forEach((point, index) => {
-        const x = point.x * canvas.clientWidth;
-        const y = point.y * canvas.clientHeight;
-        if (index === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
-      ctx.stroke();
-      if (isLive) {
-        ctx.globalAlpha = 0.35;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-    }
-
     function clearCanvas() {
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-    }
-
-    function render(payload) {
-      lastPayload = payload;
-      if (!payload) {
-        statusBar.textContent = "No data yet";
-        return;
-      }
-      clearCanvas();
-      if (payload.strokes) {
-        payload.strokes.forEach(stroke => drawStroke(stroke));
-      }
-      if (payload.liveStroke) {
-        drawStroke(payload.liveStroke, true);
-      }
-
-      if (payload.menuVisible && Array.isArray(payload.menuOptions)) {
-        menuList.innerHTML = "";
-        payload.menuOptions.forEach(option => {
-          const li = document.createElement("li");
-          li.innerHTML = `<span class="badge">${option.id}</span><span>${option.title}</span>`;
-          menuList.appendChild(li);
-        });
-        menuOverlay.style.display = "block";
-      } else {
-        menuOverlay.style.display = "none";
-      }
-
-      statusBar.textContent = `Last update: ${new Date(payload.timestamp).toLocaleTimeString()}`;
     }
 
     const FALLBACK_PAYLOAD = {
@@ -215,9 +164,93 @@
       ]
     };
 
-    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsEndpoint = `${wsProtocol}://${window.location.host}/ws`;
-    const socket = new WebSocket(wsEndpoint);
+    const DEFAULT_CANVAS_SIZE = { width: 390, height: 844 };
+
+    function computeCanvasLayout(canvasSize) {
+      const source = canvasSize && canvasSize.width > 0 && canvasSize.height > 0
+        ? canvasSize
+        : DEFAULT_CANVAS_SIZE;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const scale = Math.min(width / source.width, height / source.height);
+      return {
+        source,
+        scale,
+        offsetX: (width - source.width * scale) / 2,
+        offsetY: (height - source.height * scale) / 2
+      };
+    }
+
+    function transformPoint(point, layout) {
+      return {
+        x: layout.offsetX + point.x * layout.source.width * layout.scale,
+        y: layout.offsetY + point.y * layout.source.height * layout.scale
+      };
+    }
+
+    function drawStroke(stroke, layout, isLive = false) {
+      if (!stroke || stroke.points.length < 2) return;
+      ctx.strokeStyle = `rgba(${Math.round(stroke.color.red * 255)}, ${Math.round(stroke.color.green * 255)}, ${Math.round(stroke.color.blue * 255)}, ${stroke.color.alpha})`;
+      ctx.lineWidth = isLive ? 6 : 4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      stroke.points.forEach((point, index) => {
+        const { x, y } = transformPoint(point, layout);
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+      if (isLive) {
+        ctx.globalAlpha = 0.35;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function render(payload) {
+      lastPayload = payload;
+      if (!payload) {
+        statusBar.textContent = "No data yet";
+        clearCanvas();
+        menuOverlay.style.display = "none";
+        return;
+      }
+
+      clearCanvas();
+      const layout = computeCanvasLayout(payload.canvasSize);
+      if (payload.strokes) {
+        payload.strokes.forEach(stroke => drawStroke(stroke, layout));
+      }
+      if (payload.liveStroke) {
+        drawStroke(payload.liveStroke, layout, true);
+      }
+
+      if (payload.menuVisible && Array.isArray(payload.menuOptions)) {
+        menuList.innerHTML = "";
+        payload.menuOptions.forEach(option => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="badge">${option.id}</span><span>${option.title}</span>`;
+          menuList.appendChild(li);
+        });
+        menuOverlay.style.display = "block";
+      } else {
+        menuOverlay.style.display = "none";
+      }
+
+      statusBar.textContent = `Last update: ${new Date(payload.timestamp).toLocaleTimeString()}`;
+    }
+
+    function createWebSocket() {
+      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const wsEndpoint = `${wsProtocol}://${window.location.host}/ws`;
+      return new WebSocket(wsEndpoint);
+    }
+
+    const socket = createWebSocket();
 
     socket.addEventListener("open", () => {
       statusBar.textContent = "WebSocket connected — waiting for updates…";

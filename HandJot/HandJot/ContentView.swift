@@ -41,8 +41,14 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .onAppear { manager.startSession() }
+            .onAppear {
+                manager.startSession()
+                manager.updateDrawingSurfaceSize(geometry.size)
+            }
             .onDisappear { manager.stopSession() }
+            .onChange(of: geometry.size) {
+                manager.updateDrawingSurfaceSize($0)
+            }
         }
     }
 
