@@ -215,28 +215,46 @@
       ]
     };
 
-    async function getStrokeAndMenuInformation() {
+    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsEndpoint = `${wsProtocol}://${window.location.host}/ws`;
+    const socket = new WebSocket(wsEndpoint);
+
+    socket.addEventListener("open", () => {
+      statusBar.textContent = "WebSocket connected — waiting for updates…";
+      socket.send(JSON.stringify({ action: "fetch" }));
+    });
+
+    socket.addEventListener("message", (event) => {
       try {
-        const response = await fetch("/api/latest");
-        if (response.ok) {
-          const payload = await response.json();
-          if (payload && Object.keys(payload).length) {
-            return payload;
-          }
-        }
+        const payload = JSON.parse(event.data);
+        render(payload);
       } catch (error) {
-        console.warn("Unable to fetch live drawing data, falling back to mock", error);
+        console.warn("Unable to parse websocket payload", error);
       }
-      return FALLBACK_PAYLOAD;
-    }
+    });
 
-    async function update() {
-      const payload = await getStrokeAndMenuInformation();
-      render(payload);
-    }
+    socket.addEventListener("close", () => {
+      statusBar.textContent = "Disconnected — retrying in 2s…";
+      setTimeout(() => {
+        statusBar.textContent = "Reconnecting…";
+        location.reload();
+      }, 2000);
+    });
 
-    update();
-    setInterval(update, 1000);
+    socket.addEventListener("error", (error) => {
+      console.warn("WebSocket error", error);
+      statusBar.textContent = "WebSocket error — see console.";
+    });
+
+    const pollingHandle = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ action: "fetch" }));
+      } else if (socket.readyState === WebSocket.CLOSED) {
+        clearInterval(pollingHandle);
+      }
+    }, 1000);
+
+    render(FALLBACK_PAYLOAD);
   </script>
 </body>
 </html>

@@ -1,9 +1,9 @@
 import Foundation
-import SwiftUI
 
-#if canImport(UIKit)
+import SwiftUI
+//#if canImport(UIKit)
 import UIKit
-#endif
+//#endif
 
 struct SerializablePoint: Codable {
     let x: CGFloat
@@ -53,37 +53,79 @@ struct RemoteDrawingMessage: Codable {
     let menuVisible: Bool?
     let menuOptions: [ManualMenuItem]?
 }
+private struct WebSocketEnvelope: Codable {
+    let action: String
+    let payload: RemoteDrawingMessage?
+}
 
 final class RemoteDrawingClient {
     private let endpoint: URL
     private let session: URLSession
-    private let queue = DispatchQueue(label: "handjot.remote-stream")
+    private let queue = DispatchQueue(label: "handjot.remote-ws")
+    private var webSocketTask: URLSessionWebSocketTask?
+    private let reconnectInterval: TimeInterval = 2
+    private var reconnectWorkItem: DispatchWorkItem?
 
     init(endpoint: URL? = nil, session: URLSession = .shared) {
         if let endpoint = endpoint {
             self.endpoint = endpoint
         } else {
-            self.endpoint = URL(string: "https://e0a0-38-254-176-186.ngrok-free.app/api/drawing")!
+            self.endpoint = URL(string: "wss://e0a0-38-254-176-186.ngrok-free.app/ws")!
         }
         self.session = session
+        connect()
+    }
+
+    private func connect() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.webSocketTask?.cancel(with: .goingAway, reason: nil)
+            self.webSocketTask = self.session.webSocketTask(with: self.endpoint)
+            self.webSocketTask?.resume()
+            self.listen()
+        }
+    }
+
+    private func listen() {
+        queue.async { [weak self] in
+            guard let self = self, let task = self.webSocketTask else { return }
+            task.receive { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .failure:
+                    self.scheduleReconnect()
+                case .success:
+                    self.listen()
+                @unknown default:
+                    self.listen()
+                }
+            }
+        }
+    }
+
+    private func scheduleReconnect() {
+        reconnectWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.connect()
+        }
+        reconnectWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + reconnectInterval, execute: workItem)
     }
 
     func send(_ message: RemoteDrawingMessage) {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            var request = URLRequest(url: self.endpoint)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            guard let data = try? JSONEncoder().encode(message) else { return }
-            request.httpBody = data
-            let task = self.session.dataTask(with: request) { _, _, error in
+            guard let self = self, let task = self.webSocketTask else { return }
+            let envelope = WebSocketEnvelope(action: "publish", payload: message)
+            guard let data = try? JSONEncoder().encode(envelope) else { return }
+            task.send(.data(data)) { [weak self] error in
                 if let error = error {
-                    print("RemoteDrawingClient send error: \(error.localizedDescription)")
+                    print("RemoteDrawingClient ws send error: \(error.localizedDescription)")
+                    self?.scheduleReconnect()
                 }
             }
-            task.resume()
         }
     }
+    
 }
 
 extension Stroke {
