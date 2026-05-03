@@ -228,6 +228,9 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let smoothingFactor: CGFloat = 0.45
     private let fistMovementResetThreshold: CGFloat = 100//make it big because we dont need it
     private var currentModeDrawingFromOptionMenu = true;
+    @Published var useUltraWideCamera: Bool = false
+    private var videoInput: AVCaptureDeviceInput?
+    private var videoOutput: AVCaptureVideoDataOutput?
 
     override init() {
         handPoseRequest = VNDetectHumanHandPoseRequest()
@@ -249,9 +252,29 @@ final class HandTrackingManager: NSObject, ObservableObject {
 
     private func configureCaptureSession() {
         captureSession.beginConfiguration()
-        captureSession.sessionPreset = .high
+        // Some devices (especially ultra-wide) can be picky about presets.
+        // Prefer `.high`, otherwise fall back to a commonly supported HD preset.
+        captureSession.sessionPreset = captureSession.canSetSessionPreset(.high) ? .high : .hd1280x720
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        if let videoInput {
+            captureSession.removeInput(videoInput)
+            self.videoInput = nil
+        }
+        if let videoOutput {
+            captureSession.removeOutput(videoOutput)
+            self.videoOutput = nil
+        }
+
+        let preferredDevice: AVCaptureDevice? = {
+            if useUltraWideCamera {
+                return AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
+            }
+            return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        }()
+
+        let fallbackDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+
+        guard let device = preferredDevice ?? fallbackDevice
         else {
             captureSession.commitConfiguration()
             calibrationMessage = "Camera unavailable"
@@ -262,6 +285,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
             let input = try AVCaptureDeviceInput(device: device)
             if captureSession.canAddInput(input) {
                 captureSession.addInput(input)
+                videoInput = input
             }
         } catch {
             calibrationMessage = "Camera input failed: \(error.localizedDescription)"
@@ -274,6 +298,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
 
         if captureSession.canAddOutput(dataOutput) {
             captureSession.addOutput(dataOutput)
+            videoOutput = dataOutput
         }
 
         if let connection = dataOutput.connection(with: .video), connection.isVideoOrientationSupported {
@@ -282,7 +307,25 @@ final class HandTrackingManager: NSObject, ObservableObject {
         }
 
         previewLayer.videoGravity = .resizeAspectFill
+        if let previewConnection = previewLayer.connection, previewConnection.isVideoOrientationSupported {
+            previewConnection.videoOrientation = .portrait
+        }
         captureSession.commitConfiguration()
+    }
+
+    func applyCameraPreference(useUltraWide: Bool) {
+        guard useUltraWideCamera != useUltraWide else { return }
+        useUltraWideCamera = useUltraWide
+        processingQueue.async { [weak self] in
+            guard let self else { return }
+            let wasRunning = self.captureSession.isRunning
+            if wasRunning { self.captureSession.stopRunning() }
+            self.configureCaptureSession()
+            if wasRunning { self.captureSession.startRunning() }
+        }
+        DispatchQueue.main.async {
+            self.calibrationMessage = useUltraWide ? "Switched to ultra-wide camera" : "Switched to wide camera"
+        }
     }
 
     func startSession() {

@@ -7,6 +7,7 @@ struct CameraPreviewView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView(frame: .zero)
+        container.backgroundColor = .clear
         previewLayer.frame = container.bounds
         previewLayer.videoGravity = .resizeAspectFill
         container.layer.addSublayer(previewLayer)

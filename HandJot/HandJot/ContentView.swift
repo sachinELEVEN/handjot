@@ -88,6 +88,13 @@ struct ContentView: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundColor(.white.opacity(0.9))
                     .padding(.vertical, 6)
+                Toggle("Use ultra-wide camera", isOn: $manager.useUltraWideCamera)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(.vertical, 2)
+                    .onChange(of: manager.useUltraWideCamera) { _, newValue in
+                        manager.applyCameraPreference(useUltraWide: newValue)
+                    }
                 HStack(spacing: 10) {
                     Button(cornerButtonTitle("Monitor TL", isSet: manager.calibrationProfile.monitorTopLeft != nil)) {
                         manager.captureCalibrationPoint(.monitorTopLeft)
