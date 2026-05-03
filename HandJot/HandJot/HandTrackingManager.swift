@@ -18,16 +18,134 @@ struct Stroke: Identifiable {
     let color: Color
 }
 
-struct CalibrationProfile {
-    var topLeft: CGPoint?
-    var bottomRight: CGPoint?
+private struct Homography {
+    // Row-major 3x3 matrix.
+    let h: [Double]
 
-    var isReady: Bool {
-        topLeft != nil && bottomRight != nil
+    func apply(to point: CGPoint) -> CGPoint? {
+        guard h.count == 9 else { return nil }
+        let x = Double(point.x)
+        let y = Double(point.y)
+        let denom = h[6] * x + h[7] * y + h[8]
+        guard abs(denom) > 1e-9 else { return nil }
+        let nx = (h[0] * x + h[1] * y + h[2]) / denom
+        let ny = (h[3] * x + h[4] * y + h[5]) / denom
+        return CGPoint(x: nx, y: ny)
+    }
+}
+
+private func solveLinearSystem(_ a: [[Double]], _ b: [Double]) -> [Double]? {
+    let n = b.count
+    guard a.count == n, a.allSatisfy({ $0.count == n }) else { return nil }
+    var m = a
+    var rhs = b
+
+    for col in 0..<n {
+        var pivotRow = col
+        var pivotValue = abs(m[col][col])
+        for row in (col + 1)..<n {
+            let v = abs(m[row][col])
+            if v > pivotValue {
+                pivotValue = v
+                pivotRow = row
+            }
+        }
+        if pivotValue < 1e-12 { return nil }
+        if pivotRow != col {
+            m.swapAt(pivotRow, col)
+            rhs.swapAt(pivotRow, col)
+        }
+
+        let pivot = m[col][col]
+        for j in col..<n { m[col][j] /= pivot }
+        rhs[col] /= pivot
+
+        for row in 0..<n where row != col {
+            let factor = m[row][col]
+            if abs(factor) < 1e-12 { continue }
+            for j in col..<n { m[row][j] -= factor * m[col][j] }
+            rhs[row] -= factor * rhs[col]
+        }
     }
 
-    func asDrawingBoxPayload() -> DrawingBox? {
-        guard let tl = topLeft, let br = bottomRight else { return nil }
+    return rhs
+}
+
+private func computeHomography(from src: [CGPoint], to dst: [CGPoint]) -> Homography? {
+    guard src.count == 4, dst.count == 4 else { return nil }
+
+    // Solve for h11..h32 with h33=1
+    var a: [[Double]] = Array(repeating: Array(repeating: 0, count: 8), count: 8)
+    var b: [Double] = Array(repeating: 0, count: 8)
+
+    for i in 0..<4 {
+        let x = Double(src[i].x)
+        let y = Double(src[i].y)
+        let u = Double(dst[i].x)
+        let v = Double(dst[i].y)
+
+        let r0 = i * 2
+        let r1 = r0 + 1
+
+        a[r0][0] = x
+        a[r0][1] = y
+        a[r0][2] = 1
+        a[r0][6] = -u * x
+        a[r0][7] = -u * y
+        b[r0] = u
+
+        a[r1][3] = x
+        a[r1][4] = y
+        a[r1][5] = 1
+        a[r1][6] = -v * x
+        a[r1][7] = -v * y
+        b[r1] = v
+    }
+
+    guard let x = solveLinearSystem(a, b) else { return nil }
+    let h: [Double] = [
+        x[0], x[1], x[2],
+        x[3], x[4], x[5],
+        x[6], x[7], 1
+    ]
+    return Homography(h: h)
+}
+
+struct CalibrationProfile {
+    // Monitor corners in camera-normalized coordinates (0..1) in clockwise order.
+    var monitorTopLeft: CGPoint?
+    var monitorTopRight: CGPoint?
+    var monitorBottomRight: CGPoint?
+    var monitorBottomLeft: CGPoint?
+
+    // Optional drawing rectangle inside the monitor, stored in monitor-normalized coordinates (0..1).//
+    var drawAreaTopLeft: CGPoint?
+    var drawAreaBottomRight: CGPoint?
+    //
+
+    var isMonitorReady: Bool {
+        monitorTopLeft != nil &&
+        monitorTopRight != nil &&
+        monitorBottomRight != nil &&
+        monitorBottomLeft != nil
+    }
+
+    var isDrawAreaReady: Bool {
+        drawAreaTopLeft != nil && drawAreaBottomRight != nil
+    }
+
+    func monitorCornersArray() -> [CGPoint]? {
+        guard
+            let tl = monitorTopLeft,
+            let tr = monitorTopRight,
+            let br = monitorBottomRight,
+            let bl = monitorBottomLeft
+        else { return nil }
+        return [tl, tr, br, bl]
+    }
+
+    func drawAreaBoxPayload() -> DrawingBox? {
+        guard let tl = drawAreaTopLeft, let br = drawAreaBottomRight else { return nil }
         let minX = min(tl.x, br.x)
         let minY = min(tl.y, br.y)
         let maxX = max(tl.x, br.x)
@@ -37,32 +155,15 @@ struct CalibrationProfile {
             bottomRight: SerializablePoint(x: maxX, y: maxY)
         )
     }
-
-    func mappedPoint(from normalizedPoint: CGPoint) -> CGPoint {
-        guard let tl = topLeft, let br = bottomRight else {
-            return normalizedPoint
-        }
-
-        let minX = min(tl.x, br.x)
-        let minY = min(tl.y, br.y)
-        let maxX = max(tl.x, br.x)
-        let maxY = max(tl.y, br.y)
-
-        let width = maxX - minX
-        let height = maxY - minY
-        guard width > 0 && height > 0 else {
-            return normalizedPoint
-        }
-
-        let x = (normalizedPoint.x - minX) / width
-        let y = (normalizedPoint.y - minY) / height
-        return CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
-    }
 }
 
 enum CalibrationAnchor {
-    case topLeft
-    case bottomRight
+    case monitorTopLeft
+    case monitorTopRight
+    case monitorBottomRight
+    case monitorBottomLeft
+    case drawAreaTopLeft
+    case drawAreaBottomRight
 }
 
 final class HandTrackingManager: NSObject, ObservableObject {
@@ -85,6 +186,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let captureSession = AVCaptureSession()
     private let processingQueue = DispatchQueue(label: "handjot.hand-tracking")
     private let handPoseRequest: VNDetectHumanHandPoseRequest
+    private let rectangleRequest: VNDetectRectanglesRequest
     private var lastSmoothedPoint: CGPoint?
     private var drawingStroke: Stroke?
     private var drawingState: Bool = false
@@ -103,6 +205,8 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private let manualMenuCooldown: TimeInterval = 1.2
     private var messageWorkItem: DispatchWorkItem?
     private var drawingSurfaceSize: CanvasSize?
+    @Published var autoMonitorTrackingEnabled: Bool = true
+    private let monitorCornerSmoothing: CGFloat = 0.22
 
     private let remoteClient = RemoteDrawingClient()
     private let manualMenuItems: [ManualMenuItem] = [
@@ -125,6 +229,11 @@ final class HandTrackingManager: NSObject, ObservableObject {
     override init() {
         handPoseRequest = VNDetectHumanHandPoseRequest()
         handPoseRequest.maximumHandCount = 1
+        rectangleRequest = VNDetectRectanglesRequest()
+        rectangleRequest.maximumObservations = 1
+        rectangleRequest.minimumConfidence = 0.55
+        rectangleRequest.minimumAspectRatio = 0.35
+        rectangleRequest.quadratureTolerance = 30
         previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         super.init()
         configureCaptureSession()
@@ -205,24 +314,40 @@ final class HandTrackingManager: NSObject, ObservableObject {
         }
 
         switch anchor {
-        case .topLeft:
-            calibrationProfile.topLeft = point
-            calibrationMessage = "Box top-left captured"
-        case .bottomRight:
-            calibrationProfile.bottomRight = point
-            calibrationMessage = "Box bottom-right captured"
+        case .monitorTopLeft:
+            calibrationProfile.monitorTopLeft = point
+        case .monitorTopRight:
+            calibrationProfile.monitorTopRight = point
+        case .monitorBottomRight:
+            calibrationProfile.monitorBottomRight = point
+        case .monitorBottomLeft:
+            calibrationProfile.monitorBottomLeft = point
+        case .drawAreaTopLeft:
+            guard let homography = monitorHomography(), let p = homography.apply(to: point) else {
+                calibrationMessage = "Set all 4 monitor corners first"
+                DispatchQueue.main.async { self.publishRemoteDrawingState() }
+                return false
+            }
+            calibrationProfile.drawAreaTopLeft = CGPoint(x: min(max(p.x, 0), 1), y: min(max(p.y, 0), 1))
+        case .drawAreaBottomRight:
+            guard let homography = monitorHomography(), let p = homography.apply(to: point) else {
+                calibrationMessage = "Set all 4 monitor corners first"
+                DispatchQueue.main.async { self.publishRemoteDrawingState() }
+                return false
+            }
+            calibrationProfile.drawAreaBottomRight = CGPoint(x: min(max(p.x, 0), 1), y: min(max(p.y, 0), 1))
         }
 
-        if calibrationProfile.topLeft != nil && calibrationProfile.bottomRight != nil {
-            calibrationMessage = "Box ready — start drawing inside it"
-            DispatchQueue.main.async {
-                self.publishRemoteDrawingState()
-            }
+        if !calibrationProfile.isMonitorReady {
+            calibrationMessage = "Set all 4 monitor corners to start drawing"
+        } else if !calibrationProfile.isDrawAreaReady {
+            calibrationMessage = "Monitor ready — set draw area TL + BR (optional)"
         } else {
-            calibrationMessage = "Capture the other corner to start drawing"
-            DispatchQueue.main.async {
-                self.publishRemoteDrawingState()
-            }
+            calibrationMessage = "Draw area ready — start drawing"
+        }
+
+        DispatchQueue.main.async {
+            self.publishRemoteDrawingState()
         }
 
         return true
@@ -263,27 +388,31 @@ final class HandTrackingManager: NSObject, ObservableObject {
         let previousSmoothed = lastSmoothedPoint
         let smoothed = smoothPoint(point)
         latestNormalizedPoint = smoothed
-        let calibrated = calibrationProfile.mappedPoint(from: smoothed)
-        let previousCalibrated = previousSmoothed.map { calibrationProfile.mappedPoint(from: $0) }
-        let movement = movementDistance(from: calibrated, to: previousCalibrated)
+        let movement = movementDistance(from: smoothed, to: previousSmoothed)
         lastMovementDelta = movement
 
         if movement >= fistMovementResetThreshold {
             fistFrameCount = 0
         }
 
-        let drawingEnabled = allowDrawing && calibrationProfile.isReady
+        let drawingEnabled = allowDrawing && calibrationProfile.isMonitorReady
+        let isInsideMonitor = isPointInsideMonitor(smoothed)
+        let isInsideDrawArea = isPointInsideDrawArea(smoothed)
 
-        if drawingEnabled && movement >= movementStartThreshold {
+        if drawingEnabled && isInsideMonitor && isInsideDrawArea && movement >= movementStartThreshold {
             lastMovementTimestamp = now
             if !drawingState {
-                startStroke(at: calibrated)
+                startStroke(at: smoothed)
             }
         }
 
         if drawingState {
             if drawingEnabled {
-                appendPoint(calibrated)
+                if isInsideMonitor && isInsideDrawArea {
+                    appendPoint(smoothed)
+                } else {
+                    finalizeStroke()
+                }
                 if let lastMove = lastMovementTimestamp, now.timeIntervalSince(lastMove) >= stopTimeout {
                     finalizeStroke()
                 }
@@ -292,7 +421,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
             }
         }
 
-        let message = CoordinateMessage(x: calibrated.x, y: calibrated.y, drawing: drawingState, timestamp: now)
+        let message = CoordinateMessage(x: smoothed.x, y: smoothed.y, drawing: drawingState, timestamp: now)
         DispatchQueue.main.async {
             self.latestCoordinate = message
             self.isDrawing = self.drawingState
@@ -464,9 +593,51 @@ final class HandTrackingManager: NSObject, ObservableObject {
     }
 
     private func publishRemoteDrawingState(type: RemoteDrawingMessageType = .strokes) {
-        let strokesPayload = strokes.compactMap { $0.serializable() }
-        let livePayload = drawingStroke?.serializable()
+        let homography = monitorHomography()
+
+        let strokesPayload: [SerializableStroke] = strokes.compactMap { stroke in
+            guard let serializableColor = SerializableColor(color: stroke.color) else { return nil }
+            let mappedPoints: [SerializablePoint] = stroke.points.compactMap { point in
+                guard let p = homography?.apply(to: point) else { return nil }
+                return SerializablePoint(x: p.x, y: p.y)
+            }
+            guard mappedPoints.count > 1 else { return nil }
+            return SerializableStroke(id: stroke.id, points: mappedPoints, color: serializableColor)
+        }
+
+        let livePayload: SerializableStroke? = {
+            guard let stroke = drawingStroke else { return nil }
+            guard let serializableColor = SerializableColor(color: stroke.color) else { return nil }
+            let mappedPoints: [SerializablePoint] = stroke.points.compactMap { point in
+                guard let p = homography?.apply(to: point) else { return nil }
+                return SerializablePoint(x: p.x, y: p.y)
+            }
+            guard mappedPoints.count > 1 else { return nil }
+            return SerializableStroke(id: stroke.id, points: mappedPoints, color: serializableColor)
+        }()
         let optionsPayload = manualMenuVisible ? manualMenuItems : nil
+//
+        let monitorQuadPayload: MonitorQuad? = {
+            guard let corners = calibrationProfile.monitorCornersArray() else { return nil }
+            // When we're in monitor space, the monitor plane becomes the unit square.
+            if homography != nil {
+                return MonitorQuad(
+                    topLeft: SerializablePoint(x: 0, y: 0),
+                    topRight: SerializablePoint(x: 1, y: 0),
+                    bottomRight: SerializablePoint(x: 1, y: 1),
+                    bottomLeft: SerializablePoint(x: 0, y: 1)
+                )
+            }
+
+            // Otherwise provide the camera-space quad so the web view can still visualize it.
+            return MonitorQuad(
+                topLeft: SerializablePoint(x: corners[0].x, y: corners[0].y),
+                topRight: SerializablePoint(x: corners[1].x, y: corners[1].y),
+                bottomRight: SerializablePoint(x: corners[2].x, y: corners[2].y),
+                bottomLeft: SerializablePoint(x: corners[3].x, y: corners[3].y)
+            )
+        }()
+
         let message = RemoteDrawingMessage(type: type,
                                            timestamp: Date(),
                                            strokes: strokesPayload,
@@ -474,8 +645,51 @@ final class HandTrackingManager: NSObject, ObservableObject {
                                            menuVisible: manualMenuVisible,
                                            menuOptions: optionsPayload,
                                            canvasSize: drawingSurfaceSize,
-                                           drawingBox: calibrationProfile.asDrawingBoxPayload())
+                                           drawingBox: calibrationProfile.drawAreaBoxPayload(),
+                                           coordinateSpace: homography == nil ? nil : "monitor",
+                                           monitorQuad: monitorQuadPayload)
         remoteClient.send(message)
+    }
+
+    private func monitorHomography() -> Homography? {
+        guard let corners = calibrationProfile.monitorCornersArray() else { return nil }
+        let dst: [CGPoint] = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: 1, y: 0),
+            CGPoint(x: 1, y: 1),
+            CGPoint(x: 0, y: 1)
+        ]
+        return computeHomography(from: corners, to: dst)
+    }
+
+    private func isPointInsideMonitor(_ point: CGPoint) -> Bool {
+        guard let corners = calibrationProfile.monitorCornersArray() else { return true }
+        // corners: TL, TR, BR, BL; split quad into two triangles.
+        return pointInTriangle(point, corners[0], corners[1], corners[2]) ||
+            pointInTriangle(point, corners[0], corners[2], corners[3])
+    }
+
+    private func isPointInsideDrawArea(_ point: CGPoint) -> Bool {
+        guard calibrationProfile.isDrawAreaReady else { return true }
+        guard let homography = monitorHomography(), let p = homography.apply(to: point) else { return true }
+        guard let tl = calibrationProfile.drawAreaTopLeft, let br = calibrationProfile.drawAreaBottomRight else { return true }
+        let minX = min(tl.x, br.x)
+        let minY = min(tl.y, br.y)
+        let maxX = max(tl.x, br.x)
+        let maxY = max(tl.y, br.y)
+        return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY
+    }
+
+    private func pointInTriangle(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> Bool {
+        func sign(_ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint) -> CGFloat {
+            (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
+        }
+        let d1 = sign(p, a, b)
+        let d2 = sign(p, b, c)
+        let d3 = sign(p, c, a)
+        let hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0)
+        let hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0)
+        return !(hasNeg && hasPos)
     }
 
     private func detectGesture(from observation: VNHumanHandPoseObservation) {
@@ -617,10 +831,14 @@ extension HandTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         let requestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
 
         do {
-            try requestHandler.perform([handPoseRequest])
+            try requestHandler.perform([handPoseRequest, rectangleRequest])
         } catch {
             handleNoObservation()
             return
+        }
+
+        if autoMonitorTrackingEnabled, let rect = rectangleRequest.results?.first as? VNRectangleObservation {
+            updateMonitorCorners(from: rect)
         }
 
         guard let observation = handPoseRequest.results?.first else {
@@ -640,6 +858,35 @@ extension HandTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             processNormalizedPoint(normalized)
         } catch {
             handleNoObservation()
+        }
+    }
+}
+
+extension HandTrackingManager {
+    private func smoothCorner(_ current: CGPoint?, target: CGPoint) -> CGPoint {
+        guard let current else { return target }
+        return CGPoint(
+            x: current.x * (1 - monitorCornerSmoothing) + target.x * monitorCornerSmoothing,
+            y: current.y * (1 - monitorCornerSmoothing) + target.y * monitorCornerSmoothing
+        )
+    }
+
+    private func updateMonitorCorners(from observation: VNRectangleObservation) {
+        // Vision coordinates -> our normalized coords (same transform as fingertip)
+        func map(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: 1 - p.x, y: 1 - p.y)
+        }
+
+        let tl = map(observation.topLeft)
+        let tr = map(observation.topRight)
+        let br = map(observation.bottomRight)
+        let bl = map(observation.bottomLeft)
+
+        DispatchQueue.main.async {
+            self.calibrationProfile.monitorTopLeft = self.smoothCorner(self.calibrationProfile.monitorTopLeft, target: tl)
+            self.calibrationProfile.monitorTopRight = self.smoothCorner(self.calibrationProfile.monitorTopRight, target: tr)
+            self.calibrationProfile.monitorBottomRight = self.smoothCorner(self.calibrationProfile.monitorBottomRight, target: br)
+            self.calibrationProfile.monitorBottomLeft = self.smoothCorner(self.calibrationProfile.monitorBottomLeft, target: bl)
         }
     }
 }

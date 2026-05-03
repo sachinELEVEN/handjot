@@ -139,7 +139,8 @@
         const livePoints = payload && payload.liveStroke && Array.isArray(payload.liveStroke.points) ? payload.liveStroke.points.length : 0;
         const box = payload && payload.drawingBox ? "yes" : "no";
         const menu = payload && payload.menuVisible ? "yes" : "no";
-        return `strokes:${strokes} livePts:${livePoints} box:${box} menu:${menu}`;
+        const space = payload && payload.coordinateSpace ? payload.coordinateSpace : "camera";
+        return `strokes:${strokes} livePts:${livePoints} box:${box} menu:${menu} space:${space}`;
       } catch {
         return "payload summary unavailable";
       }
@@ -193,36 +194,16 @@
       };
     }
 
-    function computeBoxLayout(payload) {
-      const layout = computeCanvasLayout(payload && payload.canvasSize);
-      const source = layout.source;
-
-      if (payload && payload.drawingBox && payload.drawingBox.topLeft && payload.drawingBox.bottomRight) {
-        const tl = payload.drawingBox.topLeft;
-        const br = payload.drawingBox.bottomRight;
-        const boxWidth = Math.max(1e-6, (br.x - tl.x) * source.width);
-        const boxHeight = Math.max(1e-6, (br.y - tl.y) * source.height);
-        const width = canvas.clientWidth;
-        const height = canvas.clientHeight;
-        const boxScale = Math.min(width / boxWidth, height / boxHeight);
+    function transformPoint(point, layout) {
+      if (layout && layout.monitorSpace) {
         return {
-          source,
-          scale: boxScale,
-          offsetX: (width - boxWidth * boxScale) / 2,
-          offsetY: (height - boxHeight * boxScale) / 2,
-          boxWidth,
-          boxHeight,
-          hasBox: true
+          x: point.x * canvas.clientWidth,
+          y: point.y * canvas.clientHeight
         };
       }
-
-      return { ...layout, boxWidth: source.width, boxHeight: source.height, hasBox: false };
-    }
-
-    function transformPoint(point, layout) {
       return {
-        x: layout.offsetX + point.x * layout.boxWidth * layout.scale,
-        y: layout.offsetY + point.y * layout.boxHeight * layout.scale
+        x: layout.offsetX + point.x * layout.source.width * layout.scale,
+        y: layout.offsetY + point.y * layout.source.height * layout.scale
       };
     }
 
@@ -259,18 +240,39 @@
       }
 
       clearCanvas();
-      const layout = computeBoxLayout(payload);
+      const layout = payload.coordinateSpace === "monitor"
+        ? { monitorSpace: true }
+        : computeCanvasLayout(payload.canvasSize);
 
-      if (layout.hasBox) {
+      if (payload.monitorQuad && payload.monitorQuad.topLeft && payload.monitorQuad.topRight && payload.monitorQuad.bottomRight && payload.monitorQuad.bottomLeft) {
+        const pts = [
+          payload.monitorQuad.topLeft,
+          payload.monitorQuad.topRight,
+          payload.monitorQuad.bottomRight,
+          payload.monitorQuad.bottomLeft
+        ].map(p => transformPoint(p, layout));
         ctx.save();
         ctx.strokeStyle = "rgba(255,255,255,0.85)";
         ctx.lineWidth = 3;
-        ctx.strokeRect(layout.offsetX, layout.offsetY, layout.boxWidth * layout.scale, layout.boxHeight * layout.scale);
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        ctx.lineTo(pts[1].x, pts[1].y);
+        ctx.lineTo(pts[2].x, pts[2].y);
+        ctx.lineTo(pts[3].x, pts[3].y);
+        ctx.closePath();
+        ctx.stroke();
         ctx.strokeStyle = "rgba(0,0,0,0.35)";
         ctx.lineWidth = 1;
-        ctx.strokeRect(layout.offsetX, layout.offsetY, layout.boxWidth * layout.scale, layout.boxHeight * layout.scale);
-        ctx.fillStyle = "rgba(0,0,0,0.08)";
-        ctx.fillRect(layout.offsetX, layout.offsetY, layout.boxWidth * layout.scale, layout.boxHeight * layout.scale);
+        ctx.stroke();
+        ctx.restore();
+      } else if (layout.monitorSpace) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0, 0, canvas.clientWidth, canvas.clientHeight);
         ctx.restore();
       }
       if (payload.strokes) {

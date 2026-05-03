@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    //hello
     @StateObject private var manager = HandTrackingManager()
 
     var body: some View {
@@ -9,19 +10,13 @@ struct ContentView: View {
                 CameraPreviewView(previewLayer: manager.previewLayer)
                     .ignoresSafeArea()
                 Canvas { context, size in
-                    drawDrawingBox(in: &context, size: size)
+                    drawMonitorOutline(in: &context, size: size)
                     drawStrokes(in: &context, size: size)
-                }
+                }//h
                 .allowsHitTesting(false)
                 if let coordinate = manager.latestCoordinate {
-                    let hoverPoint: CGPoint = {
-                        if let rect = drawingBoxRect(in: geometry.size) {
-                            return CGPoint(x: rect.minX + coordinate.x * rect.width,
-                                           y: rect.minY + coordinate.y * rect.height)
-                        }
-                        return CGPoint(x: coordinate.x * geometry.size.width,
-                                       y: coordinate.y * geometry.size.height)
-                    }()
+                    let hoverPoint = CGPoint(x: coordinate.x * geometry.size.width,
+                                             y: coordinate.y * geometry.size.height)
                     Circle()
                         .strokeBorder(manager.currentDrawingColor.opacity(0.95), lineWidth: 3)
                         .background(Circle().fill(manager.currentDrawingColor.opacity(0.35)))
@@ -88,16 +83,33 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 12) {
-                Button("Set Box Top-left") {
-                    manager.captureCalibrationPoint(.topLeft)
-                }
-                .buttonStyle(.borderedProminent)
+            VStack(spacing: 10) {
+                Toggle("Auto-detect monitor", isOn: $manager.autoMonitorTrackingEnabled)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(.vertical, 6)
+                HStack(spacing: 10) {
+                    Button(cornerButtonTitle("Monitor TL", isSet: manager.calibrationProfile.monitorTopLeft != nil)) {
+                        manager.captureCalibrationPoint(.monitorTopLeft)
+                    }
+                    .buttonStyle(CornerCaptureButtonStyle(isCaptured: manager.calibrationProfile.monitorTopLeft != nil))
 
-                Button("Set Box Bottom-right") {
-                    manager.captureCalibrationPoint(.bottomRight)
+                    Button(cornerButtonTitle("Monitor TR", isSet: manager.calibrationProfile.monitorTopRight != nil)) {
+                        manager.captureCalibrationPoint(.monitorTopRight)
+                    }
+                    .buttonStyle(CornerCaptureButtonStyle(isCaptured: manager.calibrationProfile.monitorTopRight != nil))
                 }
-                .buttonStyle(.bordered)
+                HStack(spacing: 10) {
+                    Button(cornerButtonTitle("Monitor BL", isSet: manager.calibrationProfile.monitorBottomLeft != nil)) {
+                        manager.captureCalibrationPoint(.monitorBottomLeft)
+                    }
+                    .buttonStyle(CornerCaptureButtonStyle(isCaptured: manager.calibrationProfile.monitorBottomLeft != nil))
+
+                    Button(cornerButtonTitle("Monitor BR", isSet: manager.calibrationProfile.monitorBottomRight != nil)) {
+                        manager.captureCalibrationPoint(.monitorBottomRight)
+                    }
+                    .buttonStyle(CornerCaptureButtonStyle(isCaptured: manager.calibrationProfile.monitorBottomRight != nil))
+                }
             }
             if manager.isManualPaused {
                 Label("Drawing paused", systemImage: "pause.fill")
@@ -125,21 +137,12 @@ struct ContentView: View {
     }
 
     private func drawStrokes(in context: inout GraphicsContext, size: CGSize) {
-        let boxRect = drawingBoxRect(in: size)
         let allStrokes = manager.strokes + (manager.liveStroke.map { [$0] } ?? [])
         for stroke in allStrokes {
             guard stroke.points.count > 1 else { continue }
             var path = Path()
-            let scaled: [CGPoint]
-            if let boxRect {
-                scaled = stroke.points.map { point in
-                    CGPoint(x: boxRect.minX + point.x * boxRect.width,
-                            y: boxRect.minY + point.y * boxRect.height)
-                }
-            } else {
-                scaled = stroke.points.map { point in
-                    CGPoint(x: point.x * size.width, y: point.y * size.height)
-                }
+            let scaled = stroke.points.map { point in
+                CGPoint(x: point.x * size.width, y: point.y * size.height)
             }
             path.move(to: scaled[0])
             for point in scaled.dropFirst() {
@@ -150,29 +153,62 @@ struct ContentView: View {
         }
     }
 
-    private func drawDrawingBox(in context: inout GraphicsContext, size: CGSize) {
-        guard let rect = drawingBoxRect(in: size) else { return }
-        let boxPath = Path(rect)
-        context.stroke(boxPath, with: .color(.white.opacity(0.85)), lineWidth: 3)
-        context.stroke(boxPath, with: .color(.black.opacity(0.35)), lineWidth: 1)
-        context.fill(boxPath, with: .color(.black.opacity(0.08)))
+    private func drawMonitorOutline(in context: inout GraphicsContext, size: CGSize) {
+        guard let corners = monitorCorners(in: size) else { return }
+        var path = Path()
+        path.move(to: corners[0])
+        path.addLine(to: corners[1])
+        path.addLine(to: corners[2])
+        path.addLine(to: corners[3])
+        path.closeSubpath()
+        context.stroke(path, with: .color(.white.opacity(0.9)), lineWidth: 3)
+        context.stroke(path, with: .color(.black.opacity(0.35)), lineWidth: 1)
+        context.fill(path, with: .color(.black.opacity(0.08)))
     }
 
-    private func drawingBoxRect(in size: CGSize) -> CGRect? {
+    private func monitorCorners(in size: CGSize) -> [CGPoint]? {
         guard
-            let tl = manager.calibrationProfile.topLeft,
-            let br = manager.calibrationProfile.bottomRight
+            let tl = manager.calibrationProfile.monitorTopLeft,
+            let tr = manager.calibrationProfile.monitorTopRight,
+            let br = manager.calibrationProfile.monitorBottomRight,
+            let bl = manager.calibrationProfile.monitorBottomLeft
         else { return nil }
+        return [
+            CGPoint(x: tl.x * size.width, y: tl.y * size.height),
+            CGPoint(x: tr.x * size.width, y: tr.y * size.height),
+            CGPoint(x: br.x * size.width, y: br.y * size.height),
+            CGPoint(x: bl.x * size.width, y: bl.y * size.height)
+        ]
+    }
 
-        let minX = min(tl.x, br.x) * size.width
-        let minY = min(tl.y, br.y) * size.height
-        let maxX = max(tl.x, br.x) * size.width
-        let maxY = max(tl.y, br.y) * size.height
+    private func cornerButtonTitle(_ title: String, isSet: Bool) -> String {
+        isSet ? "\(title) ✓" : title
+    }
+}
 
-        let width = maxX - minX
-        let height = maxY - minY
-        guard width > 2, height > 2 else { return nil }
-        return CGRect(x: minX, y: minY, width: width, height: height)
+private struct CornerCaptureButtonStyle: ButtonStyle {
+    let isCaptured: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity)
+            .background(backgroundColor(isPressed: configuration.isPressed))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(isCaptured ? 0.65 : 0.28), lineWidth: 1)
+            )
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isCaptured {
+            return Color.green.opacity(isPressed ? 0.65 : 0.45)
+        }
+        return Color.blue.opacity(isPressed ? 0.75 : 0.55)
     }
 }
 

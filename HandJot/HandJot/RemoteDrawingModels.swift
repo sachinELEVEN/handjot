@@ -78,6 +78,13 @@ struct CanvasSize: Codable {
 struct DrawingBox: Codable {
     let topLeft: SerializablePoint
     let bottomRight: SerializablePoint
+}//
+
+struct MonitorQuad: Codable {
+    let topLeft: SerializablePoint
+    let topRight: SerializablePoint
+    let bottomRight: SerializablePoint
+    let bottomLeft: SerializablePoint
 }
 
 struct ManualMenuItem: Identifiable, Codable {
@@ -99,4 +106,6 @@ struct RemoteDrawingMessage: Codable {
     let menuOptions: [ManualMenuItem]?
     let canvasSize: CanvasSize?
     let drawingBox: DrawingBox?
+    let coordinateSpace: String?
+    let monitorQuad: MonitorQuad?
 }
