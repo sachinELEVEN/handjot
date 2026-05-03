@@ -170,6 +170,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
     @Published private(set) var strokes: [Stroke] = []
     @Published var latestCoordinate: CoordinateMessage?
     @Published private(set) var isDrawing: Bool = false
+    @Published private(set) var isPenDown: Bool = false
     @Published private(set) var manualMenuVisible = false
     @Published private(set) var manualActionMessage: String?
     @Published private(set) var isManualPaused: Bool = false
@@ -207,6 +208,8 @@ final class HandTrackingManager: NSObject, ObservableObject {
     private var drawingSurfaceSize: CanvasSize?
     @Published var autoMonitorTrackingEnabled: Bool = true
     private let monitorCornerSmoothing: CGFloat = 0.22
+    private var penDownState: Bool = false
+    private let penPinchThreshold: CGFloat = 0.35
 
     private let remoteClient = RemoteDrawingClient()
     private let manualMenuItems: [ManualMenuItem] = [
@@ -368,7 +371,9 @@ final class HandTrackingManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.latestCoordinate = nil
             self.isDrawing = false
+            self.isPenDown = false
         }
+        penDownState = false
     }
 
     private func smoothPoint(_ current: CGPoint) -> CGPoint {
@@ -395,7 +400,7 @@ final class HandTrackingManager: NSObject, ObservableObject {
             fistFrameCount = 0
         }
 
-        let drawingEnabled = allowDrawing && calibrationProfile.isMonitorReady
+        let drawingEnabled = allowDrawing && calibrationProfile.isMonitorReady && penDownState
         let isInsideMonitor = isPointInsideMonitor(smoothed)
         let isInsideDrawArea = isPointInsideDrawArea(smoothed)
 
@@ -693,12 +698,45 @@ final class HandTrackingManager: NSObject, ObservableObject {
     }
 
     private func detectGesture(from observation: VNHumanHandPoseObservation) {
+        let penDownNow = computePenDown(from: observation)
+        penDownState = penDownNow
+        DispatchQueue.main.async {
+            self.isPenDown = penDownNow
+        }
+
         let extendedCount = countExtendedFingers(from: observation)
         if manualMenuVisible {
             evaluateManualSelection(for: extendedCount)
         } else if manualMenuCooldownUntil == nil || manualMenuCooldownUntil! <= Date() {
             updateFistCounter(for: extendedCount)
         }
+    }
+
+    private func computePenDown(from observation: VNHumanHandPoseObservation) -> Bool {
+        func point(_ name: VNHumanHandPoseObservation.JointName) -> VNRecognizedPoint? {
+            guard let p = try? observation.recognizedPoint(name), p.confidence > 0.35 else {
+                return nil
+            }
+            return p
+        }
+
+        guard
+            let wrist = point(.wrist),
+            let indexMCP = point(.indexMCP),
+            let thumbTip = point(.thumbTip),
+            let indexTip = point(.indexTip)
+        else { return false }
+
+        // Normalize pinch distance by palm size so it scales across camera distances.
+        let palmSize = hypot(indexMCP.location.x - wrist.location.x,
+                             indexMCP.location.y - wrist.location.y)
+        guard palmSize > 1e-6 else { return false }
+
+        let pinchDist = hypot(indexTip.location.x - thumbTip.location.x,
+                              indexTip.location.y - thumbTip.location.y)
+
+        // Heuristic: if thumb + index are close (like holding a pen), treat as "pen down".
+        return pinchDist < palmSize * penPinchThreshold
     }
 
     private func updateFistCounter(for extendedCount: Int) {
