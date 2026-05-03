@@ -197,7 +197,7 @@
     function transformPoint(point, layout) {
       if (layout && layout.monitorSpace) {
         return {
-          x: point.x * canvas.clientWidth,
+          x: (1 - point.x) * canvas.clientWidth,
           y: point.y * canvas.clientHeight
         };
       }
