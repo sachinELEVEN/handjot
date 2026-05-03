@@ -133,6 +133,18 @@
       ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     }
 
+    function debugPayloadSummary(payload) {
+      try {
+        const strokes = Array.isArray(payload && payload.strokes) ? payload.strokes.length : 0;
+        const livePoints = payload && payload.liveStroke && Array.isArray(payload.liveStroke.points) ? payload.liveStroke.points.length : 0;
+        const box = payload && payload.drawingBox ? "yes" : "no";
+        const menu = payload && payload.menuVisible ? "yes" : "no";
+        return `strokes:${strokes} livePts:${livePoints} box:${box} menu:${menu}`;
+      } catch {
+        return "payload summary unavailable";
+      }
+    }
+
     const FALLBACK_PAYLOAD = {
       type: "menu",
       timestamp: new Date().toISOString(),
@@ -181,10 +193,36 @@
       };
     }
 
+    function computeBoxLayout(payload) {
+      const layout = computeCanvasLayout(payload && payload.canvasSize);
+      const source = layout.source;
+
+      if (payload && payload.drawingBox && payload.drawingBox.topLeft && payload.drawingBox.bottomRight) {
+        const tl = payload.drawingBox.topLeft;
+        const br = payload.drawingBox.bottomRight;
+        const boxWidth = Math.max(1e-6, (br.x - tl.x) * source.width);
+        const boxHeight = Math.max(1e-6, (br.y - tl.y) * source.height);
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        const boxScale = Math.min(width / boxWidth, height / boxHeight);
+        return {
+          source,
+          scale: boxScale,
+          offsetX: (width - boxWidth * boxScale) / 2,
+          offsetY: (height - boxHeight * boxScale) / 2,
+          boxWidth,
+          boxHeight,
+          hasBox: true
+        };
+      }
+
+      return { ...layout, boxWidth: source.width, boxHeight: source.height, hasBox: false };
+    }
+
     function transformPoint(point, layout) {
       return {
-        x: layout.offsetX + point.x * layout.source.width * layout.scale,
-        y: layout.offsetY + point.y * layout.source.height * layout.scale
+        x: layout.offsetX + point.x * layout.boxWidth * layout.scale,
+        y: layout.offsetY + point.y * layout.boxHeight * layout.scale
       };
     }
 
@@ -221,7 +259,20 @@
       }
 
       clearCanvas();
-      const layout = computeCanvasLayout(payload.canvasSize);
+      const layout = computeBoxLayout(payload);
+
+      if (layout.hasBox) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(layout.offsetX, layout.offsetY, layout.boxWidth * layout.scale, layout.boxHeight * layout.scale);
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(layout.offsetX, layout.offsetY, layout.boxWidth * layout.scale, layout.boxHeight * layout.scale);
+        ctx.fillStyle = "rgba(0,0,0,0.08)";
+        ctx.fillRect(layout.offsetX, layout.offsetY, layout.boxWidth * layout.scale, layout.boxHeight * layout.scale);
+        ctx.restore();
+      }
       if (payload.strokes) {
         payload.strokes.forEach(stroke => drawStroke(stroke, layout));
       }
@@ -229,7 +280,8 @@
         drawStroke(payload.liveStroke, layout, true);
       }
 
-      if (payload.menuVisible && Array.isArray(payload.menuOptions)) {
+      const shouldShowMenu = (payload.type === "menu") || payload.menuVisible === true;
+      if (shouldShowMenu && Array.isArray(payload.menuOptions)) {
         menuList.innerHTML = "";
         payload.menuOptions.forEach(option => {
           const li = document.createElement("li");
@@ -241,7 +293,9 @@
         menuOverlay.style.display = "none";
       }
 
-      statusBar.textContent = `Last update: ${new Date(payload.timestamp).toLocaleTimeString()}`;
+      const ts = payload.timestamp;
+      const when = typeof ts === "string" || typeof ts === "number" ? new Date(ts).toLocaleTimeString() : "unknown";
+      statusBar.textContent = `Last update: ${when} • ${debugPayloadSummary(payload)}`;
     }
 
     function createWebSocket() {

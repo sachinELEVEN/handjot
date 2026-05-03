@@ -9,12 +9,19 @@ struct ContentView: View {
                 CameraPreviewView(previewLayer: manager.previewLayer)
                     .ignoresSafeArea()
                 Canvas { context, size in
+                    drawDrawingBox(in: &context, size: size)
                     drawStrokes(in: &context, size: size)
                 }
                 .allowsHitTesting(false)
                 if let coordinate = manager.latestCoordinate {
-                    let hoverPoint = CGPoint(x: coordinate.x * geometry.size.width,
-                                             y: coordinate.y * geometry.size.height)
+                    let hoverPoint: CGPoint = {
+                        if let rect = drawingBoxRect(in: geometry.size) {
+                            return CGPoint(x: rect.minX + coordinate.x * rect.width,
+                                           y: rect.minY + coordinate.y * rect.height)
+                        }
+                        return CGPoint(x: coordinate.x * geometry.size.width,
+                                       y: coordinate.y * geometry.size.height)
+                    }()
                     Circle()
                         .strokeBorder(manager.currentDrawingColor.opacity(0.95), lineWidth: 3)
                         .background(Circle().fill(manager.currentDrawingColor.opacity(0.35)))
@@ -82,12 +89,12 @@ struct ContentView: View {
                 .foregroundColor(.white.opacity(0.9))
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 12) {
-                Button("Capture Top-left") {
+                Button("Set Box Top-left") {
                     manager.captureCalibrationPoint(.topLeft)
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("Capture Bottom-right") {
+                Button("Set Box Bottom-right") {
                     manager.captureCalibrationPoint(.bottomRight)
                 }
                 .buttonStyle(.bordered)
@@ -118,12 +125,21 @@ struct ContentView: View {
     }
 
     private func drawStrokes(in context: inout GraphicsContext, size: CGSize) {
+        let boxRect = drawingBoxRect(in: size)
         let allStrokes = manager.strokes + (manager.liveStroke.map { [$0] } ?? [])
         for stroke in allStrokes {
             guard stroke.points.count > 1 else { continue }
             var path = Path()
-            let scaled = stroke.points.map { point in
-                CGPoint(x: point.x * size.width, y: point.y * size.height)
+            let scaled: [CGPoint]
+            if let boxRect {
+                scaled = stroke.points.map { point in
+                    CGPoint(x: boxRect.minX + point.x * boxRect.width,
+                            y: boxRect.minY + point.y * boxRect.height)
+                }
+            } else {
+                scaled = stroke.points.map { point in
+                    CGPoint(x: point.x * size.width, y: point.y * size.height)
+                }
             }
             path.move(to: scaled[0])
             for point in scaled.dropFirst() {
@@ -132,6 +148,31 @@ struct ContentView: View {
             context.stroke(path, with: .color(stroke.color.opacity(0.95)), lineWidth: 4)
             context.stroke(path, with: .color(.black.opacity(0.2)), lineWidth: 2)
         }
+    }
+
+    private func drawDrawingBox(in context: inout GraphicsContext, size: CGSize) {
+        guard let rect = drawingBoxRect(in: size) else { return }
+        let boxPath = Path(rect)
+        context.stroke(boxPath, with: .color(.white.opacity(0.85)), lineWidth: 3)
+        context.stroke(boxPath, with: .color(.black.opacity(0.35)), lineWidth: 1)
+        context.fill(boxPath, with: .color(.black.opacity(0.08)))
+    }
+
+    private func drawingBoxRect(in size: CGSize) -> CGRect? {
+        guard
+            let tl = manager.calibrationProfile.topLeft,
+            let br = manager.calibrationProfile.bottomRight
+        else { return nil }
+
+        let minX = min(tl.x, br.x) * size.width
+        let minY = min(tl.y, br.y) * size.height
+        let maxX = max(tl.x, br.x) * size.width
+        let maxY = max(tl.y, br.y) * size.height
+
+        let width = maxX - minX
+        let height = maxY - minY
+        guard width > 2, height > 2 else { return nil }
+        return CGRect(x: minX, y: minY, width: width, height: height)
     }
 }
 

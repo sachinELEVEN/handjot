@@ -65,12 +65,17 @@ final class RemoteDrawingClient {
     private var webSocketTask: URLSessionWebSocketTask?
     private let reconnectInterval: TimeInterval = 2
     private var reconnectWorkItem: DispatchWorkItem?
+    private let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
 
     init(endpoint: URL? = nil, session: URLSession = .shared) {
         if let endpoint = endpoint {
             self.endpoint = endpoint
         } else {
-            self.endpoint = URL(string: "wss://e0a0-38-254-176-186.ngrok-free.app/ws")!
+            self.endpoint = URL(string: "wss://f950-38-254-176-85.ngrok-free.app/ws")!
         }
         self.session = session
         connect()
@@ -116,8 +121,9 @@ final class RemoteDrawingClient {
         queue.async { [weak self] in
             guard let self = self, let task = self.webSocketTask else { return }
             let envelope = WebSocketEnvelope(action: "publish", payload: message)
-            guard let data = try? JSONEncoder().encode(envelope) else { return }
-            task.send(.data(data)) { [weak self] error in
+            guard let data = try? self.encoder.encode(envelope) else { return }
+            guard let text = String(data: data, encoding: .utf8) else { return }
+            task.send(.string(text)) { [weak self] error in
                 if let error = error {
                     print("RemoteDrawingClient ws send error: \(error.localizedDescription)")
                     self?.scheduleReconnect()

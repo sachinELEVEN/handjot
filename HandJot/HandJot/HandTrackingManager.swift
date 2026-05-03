@@ -22,19 +22,40 @@ struct CalibrationProfile {
     var topLeft: CGPoint?
     var bottomRight: CGPoint?
 
+    var isReady: Bool {
+        topLeft != nil && bottomRight != nil
+    }
+
+    func asDrawingBoxPayload() -> DrawingBox? {
+        guard let tl = topLeft, let br = bottomRight else { return nil }
+        let minX = min(tl.x, br.x)
+        let minY = min(tl.y, br.y)
+        let maxX = max(tl.x, br.x)
+        let maxY = max(tl.y, br.y)
+        return DrawingBox(
+            topLeft: SerializablePoint(x: minX, y: minY),
+            bottomRight: SerializablePoint(x: maxX, y: maxY)
+        )
+    }
+
     func mappedPoint(from normalizedPoint: CGPoint) -> CGPoint {
         guard let tl = topLeft, let br = bottomRight else {
             return normalizedPoint
         }
 
-        let width = br.x - tl.x
-        let height = br.y - tl.y
+        let minX = min(tl.x, br.x)
+        let minY = min(tl.y, br.y)
+        let maxX = max(tl.x, br.x)
+        let maxY = max(tl.y, br.y)
+
+        let width = maxX - minX
+        let height = maxY - minY
         guard width > 0 && height > 0 else {
             return normalizedPoint
         }
 
-        let x = (normalizedPoint.x - tl.x) / width
-        let y = (normalizedPoint.y - tl.y) / height
+        let x = (normalizedPoint.x - minX) / width
+        let y = (normalizedPoint.y - minY) / height
         return CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
     }
 }
@@ -173,17 +194,35 @@ final class HandTrackingManager: NSObject, ObservableObject {
             return false
         }
 
+        // New anchors change the coordinate system; discard existing strokes.
+        drawingStroke = nil
+        drawingState = false
+        lastMovementTimestamp = nil
+        lastSmoothedPoint = nil
+        DispatchQueue.main.async {
+            self.strokes.removeAll()
+            self.isDrawing = false
+        }
+
         switch anchor {
         case .topLeft:
             calibrationProfile.topLeft = point
-            calibrationMessage = "Top-left anchor captured"
+            calibrationMessage = "Box top-left captured"
         case .bottomRight:
             calibrationProfile.bottomRight = point
-            calibrationMessage = "Bottom-right anchor captured"
+            calibrationMessage = "Box bottom-right captured"
         }
 
         if calibrationProfile.topLeft != nil && calibrationProfile.bottomRight != nil {
-            calibrationMessage = "Calibration ready"
+            calibrationMessage = "Box ready — start drawing inside it"
+            DispatchQueue.main.async {
+                self.publishRemoteDrawingState()
+            }
+        } else {
+            calibrationMessage = "Capture the other corner to start drawing"
+            DispatchQueue.main.async {
+                self.publishRemoteDrawingState()
+            }
         }
 
         return true
@@ -224,23 +263,27 @@ final class HandTrackingManager: NSObject, ObservableObject {
         let previousSmoothed = lastSmoothedPoint
         let smoothed = smoothPoint(point)
         latestNormalizedPoint = smoothed
-        let movement = movementDistance(from: smoothed, to: previousSmoothed)
+        let calibrated = calibrationProfile.mappedPoint(from: smoothed)
+        let previousCalibrated = previousSmoothed.map { calibrationProfile.mappedPoint(from: $0) }
+        let movement = movementDistance(from: calibrated, to: previousCalibrated)
         lastMovementDelta = movement
 
         if movement >= fistMovementResetThreshold {
             fistFrameCount = 0
         }
 
-        if allowDrawing && movement >= movementStartThreshold {
+        let drawingEnabled = allowDrawing && calibrationProfile.isReady
+
+        if drawingEnabled && movement >= movementStartThreshold {
             lastMovementTimestamp = now
             if !drawingState {
-                startStroke(at: smoothed)
+                startStroke(at: calibrated)
             }
         }
 
         if drawingState {
-            if allowDrawing {
-                appendPoint(smoothed)
+            if drawingEnabled {
+                appendPoint(calibrated)
                 if let lastMove = lastMovementTimestamp, now.timeIntervalSince(lastMove) >= stopTimeout {
                     finalizeStroke()
                 }
@@ -249,7 +292,6 @@ final class HandTrackingManager: NSObject, ObservableObject {
             }
         }
 
-        let calibrated = calibrationProfile.mappedPoint(from: smoothed)
         let message = CoordinateMessage(x: calibrated.x, y: calibrated.y, drawing: drawingState, timestamp: now)
         DispatchQueue.main.async {
             self.latestCoordinate = message
@@ -431,7 +473,8 @@ final class HandTrackingManager: NSObject, ObservableObject {
                                            liveStroke: livePayload,
                                            menuVisible: manualMenuVisible,
                                            menuOptions: optionsPayload,
-                                           canvasSize: drawingSurfaceSize)
+                                           canvasSize: drawingSurfaceSize,
+                                           drawingBox: calibrationProfile.asDrawingBoxPayload())
         remoteClient.send(message)
     }
 
